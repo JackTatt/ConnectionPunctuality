@@ -150,9 +150,9 @@ interchanges = pd.concat(interchanges,Add)
 # Check
 print(interchanges.head())
 
-# Convert to GeoPandas
-connections = gpd.GeoDataFrame(interchanges, )
-
+# Convert to Datetimes
+times.arrival_time = pd.to_datetime(times.arrival_time)
+times.departure_time = pd.to_datetime(times.departure_time)
 # Setup Transport Network for R5Py
 gtha = r5py.TransportNetwork('GTHA_OSM20230525.osm.pbf')
 
@@ -199,6 +199,7 @@ for i in range(len(interchange)):
     transfers = pd.empty
     giver = interchange[i]['stop_id_from']
     taker = interchange[i]['stop_id_to']
+    minCT = interchange[i]['Min_Connection']
     arrcalls = services.loc[services['stop_id'] == giver]['route_id']
     depcalls = services.loc[services['stop_id'] == taker]['route_id']
     if len(arrcalls) > 1:
@@ -226,14 +227,14 @@ for i in range(len(interchange)):
             transfers.TakerDep = services.loc[services['stop_id'] == taker and 
                                           (services['route_id'] == depcalls[j])]['departure_time']
     # Range for connecting service
-        transfers.minDepTaker = transfers.GiverArr + interchanges[i]['Min_Connection']
-        transfers.maxDepTaker = transfers.GiverArr + maxCT
-        transfers.minDepGiver = transfers.TakerArr + interchanges[i]['Min_Connection']
-        transfers.maxDepGiver = transfers.TakerArr + maxCT
-        transfers.minArrTaker = transfers.GiverDep - interchanges[i]['Min_Connection']
-        transfers.maxArrTaker = transfers.GiverDep - maxCT
-        transfers.minArrGiver = transfers.TakerDep - interchanges[i]['Min_Connection']
-        transfers.maxArrGiver = transfers.TakerDep - maxCT
+        transfers.minDepTaker = transfers.GiverArr + dt.timedelta(minutes = minCT)
+        transfers.maxDepTaker = transfers.GiverArr + dt.timedelta(minutes = maxCT)
+        transfers.minDepGiver = transfers.TakerArr + dt.timedelta(minutes = minCT)
+        transfers.maxDepGiver = transfers.TakerArr + dt.timedelta(minutes = maxCT)
+        transfers.minArrTaker = transfers.GiverDep - dt.timedelta(minutes = minCT)
+        transfers.maxArrTaker = transfers.GiverDep - dt.timedelta(minutes = maxCT)
+        transfers.minArrGiver = transfers.TakerDep - dt.timedelta(minutes = minCT)
+        transfers.maxArrGiver = transfers.TakerDep - dt.timedelta(minutes = maxCT)
     # Separate by route id.
     # Giver Route != Taker Route -- report in transfers dataframe
     # Same route must not call at same stop multiple times within connection window
