@@ -12,11 +12,10 @@ import geopandas as gpd
 import pandas as pd
 import r5py
 import datetime as dt
-from zipfile import ZipFile
 
 '''
 # GTFS Format:
-Zip files must be of name AGENCYID_DATE.zip
+GTFS files must be already unzipped. 
 Constituent files routes.txt and agencies.txt must include
 column titled agency_id with correct AGENCYID in each entry.
 
@@ -26,66 +25,48 @@ Failure to adhere to these specs may lead to code issues.
 Date = str("2022DEC14")     # Date of analysis as string YYYYMMMDD
 # Specify list of agencies in analysis
 scope = ['TTC','GO','YRT','DRT','HSR','BT','MilT','OakT','BurT','UPExpress']
-
-# Initialize region-wide GTFS dataframes
-operators = pd.empty()
-agencies = pd.empty()
-routes = pd.empty()
-stop = pd.empty()
-trips = pd.empty()
-times = pd.empty()
-dates = pd.empty()
-shapes = pd.empty()
-calendar = pd.empty()
-
+# Initialalize dataframes
+routes = pd.DataFrame(columns=['agency_id','route_id','route_short_name','route_long_name','route_type'])
+stop = pd.DataFrame(columns=['agency_id','stop_id','stop_lat','stop_lon'])
+trips = pd.DataFrame(columns=['agency_id','trip_id','route_id','service_id'])
+times = pd.DataFrame(columns=['agency_id','trip_id','stop_id','arrival_time','departure_time','stop_sequence'])
+dates = pd.DataFrame()
+calendar = pd.DataFrame()
+   
 for Agency in scope:
-    
-    ZipFile.extractall(f'staticGTFS\\{Agency}_{Date}_gtfs.zip')
-
-    # Import as dataframes and add agency_id    
-    agency = pd.read_table(f'staticGTFS\\{Agency}_{Date}_gtfs\\agency.txt')  
-    Routes = pd.read_table(f'staticGTFS\\{Agency}_{Date}_gtfs\\routes.txt')
-    Trips = pd.read_table(f'staticGTFS\\{Agency}_{Date}_gtfs\\trips.txt')
+    # Import as dataframes and add agency_id     
+    Routes = pd.read_table(f'Static GTFS\\{Agency}_{Date}_gtfs\\routes.txt',
+                           names=['agency_id','route_id','route_short_name','route_long_name','route_type'])
+    Trips = pd.read_table(f'Static GTFS\\{Agency}_{Date}_gtfs\\trips.txt', 
+                          names=['agency_id','trip_id','route_id','service_id'])
     Trips['agency_id'] = Agency
-    Stops = pd.read_table(f'staticGTFS\\{Agency}_{Date}_gtfs\\stops.txt')
+    Stops = pd.read_table(f'Static GTFS\\{Agency}_{Date}_gtfs\\stops.txt',
+                          names=['agency_id','stop_id','stop_lat','stop_lon'])
     Stops['agency_id'] = Agency
-    Times = pd.read_table(f'staticGTFS\\{Agency}_{Date}_gtfs\\stop_times.txt')
+    Times = pd.read_table(f'Static GTFS\\{Agency}_{Date}_gtfs\\stop_times.txt', 
+                          names=['agency_id','trip_id','stop_id','arrival_time','departure_time','stop_sequence'])
     Times['agency_id'] = Agency
-    Calendar = pd.read_table(f'staticGTFS\\{Agency}_{Date}_gtfs\\calendar.txt')
-    calendar['agency_id'] = Agency
-    Dates = pd.read_table(f'staticGTFS\\{Agency}_{Date}_gtfs\\dates.txt')
+    '''
+    Calendar = pd.read_table(f'Static GTFS\\{Agency}_{Date}_gtfs\\calendar.txt')
+    Calendar['agency_id'] = Agency
+    Dates = pd.read_table(f'Static GTFS\\{Agency}_{Date}_gtfs\\calendar_dates.txt')
     Dates['agency_id'] = Agency
-    Shapes = pd.read_table(f'staticGTFS\\{Agency}_{Date}_gtfs\\shapes.txt')
-
-    agency = pd.read_table('staticGTFS\\agency.txt')  
-    Routes = pd.read_table('staticGTFS\\{routes.txt')
-    Trips = pd.read_table('staticGTFS\\trips.txt')
-    Trips['agency_id'] = Agency
-    Stops = pd.read_table('staticGTFS\\stops.txt')
-    Stops['agency_id'] = Agency
-    Times = pd.read_table('staticGTFS\\stop_times.txt')
-    Times['agency_id'] = Agency
-    Calendar = pd.read_table('staticGTFS\\calendar.txt')
-    calendar['agency_id'] = Agency
-    Dates = pd.read_table('staticGTFS\\dates.txt')
-    Dates['agency_id'] = Agency
-    Shapes = pd.read_table('staticGTFS\\shapes.txt')
-    Shapes['agency_id'] = Agency
-    operators['agency_name'] = agency['agency_name']
-    operators['agency_id'] = agency['agency_id']
-    # Append to single region-wide GTFS dataframes
+    '''
     
-    agencies = pd.append(agency)
-    routes = pd.append(Routes)
-    stop = pd.append(Stops)
-    trips = pd.append(Trips)
-    times = pd.append(Times)
-    dates = pd.append(Dates)
-    shapes = pd.append(Shapes)
-    calendar = pd.append(Calendar)
+    #Concat to single region-wide GTFS dataframes
+    routes = pd.concat([routes, Routes], axis=0,ignore_index=True,sort=True)
+    stop = pd.concat([stop, Stops], axis=0, ignore_index=True,sort=True)
+    trips = pd.concat([trips, Trips], axis=0,ignore_index=True,sort=True)
+    times = pd.concat([times, Times], axis=0,ignore_index=True,sort=True)
 
 #convert to geodataframe:
+print(stop.columns)
 stops = gpd.GeoDataFrame(stop, geometry=gpd.points_from_xy(stop.stop_lon,stop.stop_lat), crs = "EPSG:2958")
+# Convert to Datetimes
+times.arrival_time = pd.to_datetime(times.arrival_time)
+times.departure_time = pd.to_datetime(times.departure_time)
+# Setup Transport Network for R5Py
+gtha = r5py.TransportNetwork('GTHA_OSM20230525.osm.pbf', gtfs=[],build_config={})
 
 # Interchange Identification
 '''
@@ -116,9 +97,9 @@ hub_list = pd.read_csv('GTHA_ConnectionHubs.csv')
 # check hub list first
 for i in range(len(hub_list)):
     pt = interchange.loc[interchange['stop_name'] == hub_list.hub[i]]
-    addition = stops.loc[stops['stop_name'].str.contains(hub_list.althub1)]
-    if hub_list.althub2[i].notna() == True:
-        Addition = stops.iloc[i].str.contains(hub_list.althub2[i])
+    addition = stops.loc[stops['stop_name'].str.contains(hub_list.alt_hub1)]
+    if hub_list.alt_hub2[i].notna() == True:
+        Addition = stops.iloc[i].str.contains(hub_list.alt_hub2[i])
         Addition = pd.concat(addition,Addition, axis = 0)
         if hub_list.althub3[i].notna() == True:
             ADDITION = stops.iloc[i].str.contains(hub_list.althub3[i])
@@ -150,13 +131,6 @@ interchanges = pd.concat(interchanges,Add)
 # Check
 print(interchanges.head())
 
-# Convert to Datetimes
-times.arrival_time = pd.to_datetime(times.arrival_time)
-times.departure_time = pd.to_datetime(times.departure_time)
-# Setup Transport Network for R5Py
-gtha = r5py.TransportNetwork('GTHA_OSM20230525.osm.pbf')
-
-
 '''
 THOUGHTS:
     Including high-frequency services may be problematic especially in reverse
@@ -175,6 +149,11 @@ THOUGHTS:
         i.e. departures per hour
         thus, 12 tph connection to 2 tph only gives 2 connections possible in the first place
         At this: 2/2 = 100% CONNECTION PUNCTUALITY
+        
+Alternative to R5Py: OPEN TRIP PLANNER (OTP):
+    Route Request. set walkSpeed=??
+https://docs.opentripplanner.org/en/v2.3.0/RouteRequest/ 
+
 '''
 
 # Minimum Connection Time (Walking Distance Between Stop Points)
