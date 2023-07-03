@@ -10,7 +10,6 @@ CONNECTION PUNCTUALITY CALCULATOR
 # Required  modules to support calculations
 import geopandas as gpd
 import pandas as pd
-import r5py
 import datetime as dt
 
 '''
@@ -26,25 +25,26 @@ Date = str("2022DEC14")     # Date of analysis as string YYYYMMMDD
 # Specify list of agencies in analysis
 scope = ['TTC','GO','YRT','DRT','HSR','BT','MilT','OakT','BurT','UPExpress']
 # Initialalize dataframes
-routes = pd.DataFrame(columns=['agency_id','route_id','route_short_name','route_long_name','route_type'])
-stop = pd.DataFrame(columns=['agency_id','stop_id','stop_lat','stop_lon'])
-trips = pd.DataFrame(columns=['agency_id','trip_id','route_id','service_id'])
-times = pd.DataFrame(columns=['agency_id','trip_id','stop_id','arrival_time','departure_time','stop_sequence'])
+routes = pd.DataFrame()
+stop = pd.DataFrame()
+trips = pd.DataFrame()
+times = pd.DataFrame()
 dates = pd.DataFrame()
 calendar = pd.DataFrame()
    
 for Agency in scope:
     # Import as dataframes and add agency_id     
-    Routes = pd.read_table(f'Static GTFS\\{Agency}_{Date}_gtfs\\routes.txt',
-                           names=['agency_id','route_id','route_short_name','route_long_name','route_type'])
+    Routes = pd.read_csv(f'Static GTFS\\{Agency}_{Date}_gtfs\\routes.txt',
+                           usecols=['agency_id','route_id','route_short_name','route_long_name','route_type'],
+                           sep=',',header=0)
     Trips = pd.read_table(f'Static GTFS\\{Agency}_{Date}_gtfs\\trips.txt', 
-                          names=['agency_id','trip_id','route_id','service_id'])
+                          usecols=['route_id','trip_id'],header=0,sep=',')
     Trips['agency_id'] = Agency
-    Stops = pd.read_table(f'Static GTFS\\{Agency}_{Date}_gtfs\\stops.txt',
-                          names=['agency_id','stop_id','stop_lat','stop_lon'])
+    Stops = pd.read_csv(f'Static GTFS\\{Agency}_{Date}_gtfs\\stops.txt',
+                          usecols=['stop_id','stop_name','stop_lat','stop_lon'],header=0,sep=',')
     Stops['agency_id'] = Agency
-    Times = pd.read_table(f'Static GTFS\\{Agency}_{Date}_gtfs\\stop_times.txt', 
-                          names=['agency_id','trip_id','stop_id','arrival_time','departure_time','stop_sequence'])
+    Times = pd.read_csv(f'Static GTFS\\{Agency}_{Date}_gtfs\\stop_times.txt', 
+                          usecols=['trip_id','stop_id','arrival_time','departure_time'],header=0,sep=',')
     Times['agency_id'] = Agency
     '''
     Calendar = pd.read_table(f'Static GTFS\\{Agency}_{Date}_gtfs\\calendar.txt')
@@ -52,7 +52,6 @@ for Agency in scope:
     Dates = pd.read_table(f'Static GTFS\\{Agency}_{Date}_gtfs\\calendar_dates.txt')
     Dates['agency_id'] = Agency
     '''
-    
     #Concat to single region-wide GTFS dataframes
     routes = pd.concat([routes, Routes], axis=0,ignore_index=True,sort=True)
     stop = pd.concat([stop, Stops], axis=0, ignore_index=True,sort=True)
@@ -60,73 +59,46 @@ for Agency in scope:
     times = pd.concat([times, Times], axis=0,ignore_index=True,sort=True)
 
 #convert to geodataframe:
-print(stop.columns)
-stops = gpd.GeoDataFrame(stop, geometry=gpd.points_from_xy(stop.stop_lon,stop.stop_lat), crs = "EPSG:2958")
+stops = gpd.GeoDataFrame(stop, geometry=gpd.points_from_xy(stop['stop_lon'],stop['stop_lat']),crs="EPSG:2958")
 # Convert to Datetimes
-times.arrival_time = pd.to_datetime(times.arrival_time)
-times.departure_time = pd.to_datetime(times.departure_time)
-# Setup Transport Network for R5Py
-gtha = r5py.TransportNetwork('GTHA_OSM20230525.osm.pbf', gtfs=[],build_config={})
-
+times.arrival_time=times.arrival_time.str.zfill(8)
+times.departure_time=times.departure_time.str.zfill(8)
+times.arrival_time = pd.to_timedelta(times.arrival_time)
+times.departure_time = pd.to_timedelta(times.departure_time)
+stops.drop(columns=['stop_lon','stop_lat'],inplace=True)
+print(stops.head())
 # Interchange Identification
 '''
 Search for main terminals/stations with common names
-Check list of interchange hubs made up of stations/terminals with trigger words:
-    Station, Terminal, Bus Terminal
-'''
-inter = pd.empty()
-inter = stops.loc[stops['stop_name'].str.contains("Station", case=False)]
-inter = stops.loc[stops['stop_name'].str.contains("Terminal", case=False)]
-inter = stops.loc[stops['stop_name'].str.contains("Bus Terminal", case=False)]
-interchange = inter[['stop_id','stop_name','stop_lat', 'stop_lon']]
-interchange.rename(columns={'agency_id':'to_agency', 'stop_id':'to_stop_id', 'stop_name':'to_stop_name',
-                             'stop_lat':'to_stop_lat', 'stop_lon':'to_stop_lon'},
-                    inplace=True)
-fakehub = ['Station Rd', 'Station Ave', 'Station St', 
-           'Terminal Rd', 'Terminal Ave', 'Terminal St']
-for i in len(fakehub):
-    inter = inter[inter.stop_name.contains(fakehub) == False]   
-
-'''
+Check list of stop names including interchange names contained in interchange 'hub list'
 Collect stops corresponding to the same interchange to create to/from selection
-Hub list gives interchanges that are not published as such (Newcastle Street at Royal York Rd / Mimico GO;
-                                                            Long Branch GO / Long Branch Loop)
 '''
-
+interchanges = pd.DataFrame(columns=['from_stop','from_geometry','to_stop','to_geometry'])
+interchange = pd.DataFrame()
 hub_list = pd.read_csv('GTHA_ConnectionHubs.csv')
-# check hub list first
-for i in range(len(hub_list)):
-    pt = interchange.loc[interchange['stop_name'] == hub_list.hub[i]]
-    addition = stops.loc[stops['stop_name'].str.contains(hub_list.alt_hub1)]
-    if hub_list.alt_hub2[i].notna() == True:
-        Addition = stops.iloc[i].str.contains(hub_list.alt_hub2[i])
-        Addition = pd.concat(addition,Addition, axis = 0)
-        if hub_list.althub3[i].notna() == True:
-            ADDITION = stops.iloc[i].str.contains(hub_list.althub3[i])
-            addhub = pd.concat(ADDITION,Addition, axis = 0)
-        else:
-            addhub = Addition.copy()
-    else:
-        addhub = addition.copy()
-  
-for idx,hub in enumerate(interchange['to_stop_name']):
-    key = interchange['to_stop_name'].find(' - ')
-    if key != -1:
-        if interchange['to_stop_name'].find('Station - ') != -1:
-            Hub = hub[:key]
-            Add = stops.loc[stops['stop_name'].str.contains(Hub, case=False)]['stop_name','geometry']
-            Add['stop_name_to'] = hub
-        else:
-            Hub = hub[key:]
-            Add = stops.loc[stops['stop_name'].str.contains(Hub, case=False)]['stop_name','geometry']
-            Add['stop_name_to'] = hub
 
-    rep = len(interchange['stop_name'] == hub)
-    interchange.loc[interchange.index.repeat(rep)].reset_index(drop=True)
-    interchanges = pd.merge(interchange,Add,left_on = 'to_stop_name',right_on = 'stop_name_to',
-                        suffixes=('_to', '_from'))
-    
-interchanges = pd.concat(interchanges,Add)
+for i in range(len(hub_list)):
+    interchange = stops.iloc[i].str.contains(hub_list.hub[i])[['stop_name','geometry']]
+    if hub_list.alt_hub1[i] != None:
+        add1 = stops.iloc[i].str.contains(hub_list.alt_hub1[i])[['stop_name','geometry']]
+        interchange = pd.concat([interchange,add1], axis=0)
+        if hub_list.alt_hub2[i] != None:
+            add2 = stops.iloc[i].str.contains(hub_list.alt_hub2[i])[['stop_name','geometry']]
+            interchange = pd.concat([interchange,add2], axis = 0)
+            if hub_list.alt_hub3[i] != None:
+                add3 = stops.iloc[i].str.contains(hub_list.alt_hub3[i])[['stop_name','geometry']]
+                interchange = pd.concat([interchange,add3], axis = 0)
+    num = len(interchange)
+    print(interchange.head())
+    link = interchange
+    interchange.rename({'stop_name':'from_stop','geometry':'from_geometry'},inplace=True)
+    interchange['from_stop'].repeat(num)
+    interchange[['to_stop','to_geometry']] = link
+    interchanges = pd.concat([interchanges, interchange], axis=1)s
+
+interchanges.drop_duplicates()
+print(interchange.head())
+interchanges = pd.concat(interchanges,interchange)
 
 # Check
 print(interchanges.head())
@@ -153,9 +125,7 @@ THOUGHTS:
 Alternative to R5Py: OPEN TRIP PLANNER (OTP):
     Route Request. set walkSpeed=??
 https://docs.opentripplanner.org/en/v2.3.0/RouteRequest/ 
-
 '''
-
 # Minimum Connection Time (Walking Distance Between Stop Points)
 transfer = r5py.TravelTimeMatrixComputer(gtha,
                                          origins=interchanges['geometry_from'], 
