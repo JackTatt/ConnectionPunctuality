@@ -14,6 +14,7 @@ import osmnx
 import taxicab as tc
 import simpy
 import matplotlib as mp
+import itertools
 
 '''
 # GTFS Format:
@@ -65,8 +66,7 @@ for Agency in scope:
 
 # convert to geodataframe:
 # Convert to Datetimes
-stops['loc'] = stops[['stop_lat', 'stop_lon']].apply(tuple, axis=1)
-stops.drop(columns=['stop_lat','stop_lat'], inplace=True)
+stops['locate'] = stops[['stop_lat', 'stop_lon']].apply(tuple, axis=1)
 times.arrival_time = times.arrival_time.str.zfill(8)
 times.departure_time = times.departure_time.str.zfill(8)
 times.arrival_time = pd.to_timedelta(times.arrival_time)
@@ -77,31 +77,30 @@ Search for main terminals/stations with common names
 Check list of stop names including interchange names contained in interchange 'hub list'
 Collect stops corresponding to the same interchange to create to/from selection
 '''
-interchanges = pd.DataFrame(columns=['from_stop','from_loc','to_stop','to_loc'])
-interchange = pd.DataFrame(columns=['from_stop','from_loc'])
+interchange = pd.DataFrame()
+interchanges = pd.DataFrame()
 hub_list = pd.read_csv('GTHA_ConnectionHubs.csv')
 
 for i in range(len(hub_list)):
-    interchange['from_stop','from_loc'] = stops.loc[stops['stop_name'].str.contains(
-        hub_list.hub[i])][['stop_name', 'loc']]
+    platforms = stops.loc[stops['stop_name'].str.contains(
+        hub_list.hub[i],case=False)][['stop_name', 'locate']]
     if hub_list.althub1[i] != '-':
-        interchange['from_stop','from_loc'] = stops.loc[stops['stop_name'].str.contains(hub_list.althub1[i])][[
-            'stop_name', 'loc']]
+        platforms = stops.loc[stops['stop_name'].str.contains(
+            hub_list.althub1[i],case=False)][['stop_name', 'locate']]
         if hub_list.althub2[i] != '-':
-            interchange['from_stop','from_loc'] = stops.loc[stops['stop_name'].str.contains(hub_list.althub2[i])][[
-                'stop_name', 'loc']]
-    num = len(interchange)
-    interchange[['to_stop', 'to_loc']] = interchange[['stop_name','loc']]
-    interchange['stop_name'].repeat(num)
-    interchanges = pd.concat([interchanges, interchange], axis=1, ignore_index=True)
-
-interchanges.rename(columns={'stop_name':'from_stop','loc':'from_loc'}, inplace=True)
+            platforms = stops.loc[stops['stop_name'].str.contains(
+                hub_list.althub2[i],case=False)][['stop_name', 'locate']]
+    interchange = pd.DataFrame(itertools.permutations(platforms['locate'], 2),columns=['from_loc','to_loc'])
+    platforms.reset_index(inplace=True,drop=True)
+    interchange['from_stop'] = platforms[platforms.locate.isin(
+                interchange['from_loc'])]['stop_name']
+    interchange['to_stop'] = platforms[platforms['locate'].isin(
+                interchange['to_loc'])]['stop_name']
+    interchanges = pd.concat([interchanges, interchange], axis=0)
 interchanges.drop_duplicates()
-interchanges = pd.concat([interchanges, interchange], axis=0)
-
-# Check
+interchange.reset_index(inplace=True)
 print(interchanges.head())
-
+interchanges.to_csv('GTHA_connections.csv')
 '''
 # CONNECTION WINDOW #
 Defined by Minimum and Maximum Connection Times
@@ -116,11 +115,10 @@ https://github.com/nathanrooy/taxicab
 # Minimum Connection Time (Walking Distance Between Stop Points)
 # Create the graph of the area from OSM
 graph_area = ("Golden Horseshoe, Ontario, Canada")
-G = osmnx.graph_from_place(graph_area, network_type='all', simplify=False)
-
+#G = osmnx.graph_from_place(graph_area, network_type='all', simplify=False)
 # Save graph to disk
-osmnx.save_graphml(G, "GoldenHorseshoe.graphml")
-#G = ox.load_graphml("name.graphml")
+#osmnx.save_graphml(G, "GoldenHorseshoe.graphml")
+G = osmnx.load_graphml("GoldenHorseshoe.graphml")
 # Get the shortest route by distance
 interchanges.dist = tc.distance.shortest_path(G, interchanges.origin, interchanges.dest)[0]
 # Travel time in minutes
@@ -176,13 +174,12 @@ while tick <= 1440:
                 if (connex.mindep <= toc)and(connex.maxdep >= toc):
                     connections.successful[connex.depstop == stn] += 1
                     # Close out connection option by deleting row
-                connex.drop(connex[(connex.depstop == stn)and(connex.deptime == toc)].index, axis=0)
+                    connex.drop(connex[(connex.depstop == stn)and(connex.deptime == toc)].index, axis=0)
     tick += 1 #Advance timestep by 1 minute      
- 
  
 # Final Performance
 connections.punctuality = connections.successful / connections.calls
 # Output results
-pd.connections.to_csv('GTHA_connections.csv')
+connections.to_csv('GTHA_connections.csv')
 
 # Plot Results Cartographically
