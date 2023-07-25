@@ -1,4 +1,0 @@
-NOTICE
-------------------------
-Temporarily housed within fare accessibility calculator. 
-Not necessarily aligned/integrated with accessibility calculator.
