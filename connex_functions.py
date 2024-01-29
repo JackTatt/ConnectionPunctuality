@@ -1,207 +1,307 @@
 # -*- coding: utf-8 -*-
 """
 Created on Thu May 25 20:27:17 2023
-
 @author: Jack Tattersall
-
-CONNECTION PUNCTUALITY CALCULATOR
+CONNECTION PUNCTUALITY CALCULATOR FUNCTIONS
 """
-
-# Required  modules to support calculations
 import pandas as pd
 import datetime as dt
 import json
 import requests
-import simpy
-import itertools
 
+# File Imports
 '''
-# GTFS Format:
+GTFS Format:
 GTFS files must be already unzipped. 
 Constituent files routes.txt and agencies.txt must include
 column titled agency_id with correct AGENCYID in each entry.
-
-Failure to adhere to these specs may lead to code issues.
 '''
-# Collect GTFS
-Date = str("2022DEC14")     # Date of analysis as string YYYYMMMDD
-# Specify list of agencies in analysis
-scope = ['TTC', 'GO', 'YRT', 'DRT', 'HSR',
-         'BT', 'MilT', 'OakT', 'BurT', 'UPExpress']
-# Initialalize dataframes
-routes = pd.DataFrame()
-stops = pd.DataFrame()
-trips = pd.DataFrame()
-times = pd.DataFrame()
-dates = pd.DataFrame()
-calendar = pd.DataFrame()
-
-for Agency in scope:
-    # Import as dataframes and add agency_id
-    Routes = pd.read_csv(f'Static GTFS\\{Agency}_{Date}_gtfs\\routes.txt',
-                         usecols=['agency_id', 'route_id', 'route_short_name',
-                                  'route_long_name', 'route_type'],
-                         sep=',', header=0)
-    Routes=Routes[['agency_id', 'route_id', 'route_short_name',
-             'route_long_name', 'route_type']]
-    Stops = pd.read_csv(f'Static GTFS\\{Agency}_{Date}_gtfs\\stops.txt',
-                        usecols=['stop_id', 'stop_name', 'stop_lat', 'stop_lon'], header=0, sep=',')
-    Stops['agency_id'] = Agency
-    Stops = Stops[['stop_id', 'stop_name', 'stop_lat', 'stop_lon']]
-    Times = pd.read_csv(f'Static GTFS\\{Agency}_{Date}_gtfs\\stop_times.txt',
-                        usecols=['trip_id','stop_id','arrival_time',
-                                 'departure_time'],header=0,sep=',')
-    Times['agency_id'] = Agency
-    Times = Times[['trip_id','stop_id','arrival_time',
-             'departure_time']]
-
-    if (Agency == 'GO')or(Agency == 'UPExpress'):
-        Trip = pd.read_csv(f'Static GTFS\\{Agency}_{Date}_gtfs\\trips.txt',
-                                usecols=['trip_id','service_id','route_id'],header=0,sep=',')
-        Trips = Trip[Trip.service_id == '20221214']
-        Trips = Trips[['trip_id','service_id','route_id']]
-    else:   
-        Trips = pd.read_csv(f'Static GTFS\\{Agency}_{Date}_gtfs\\trips.txt',
-                            usecols=['trip_id','service_id','route_id'],header=0,sep=',')
-    # Concat to single region-wide GTFS dataframes
-    routes = pd.concat([Routes,routes])
-    routes.reset_index(drop=True,inplace=True)
-    stops = pd.concat([Stops,stops])
+def Immigration(Date, scope):
+    # Initialalize dataframe
+    tours = pd.DataFrame()
+    stops = pd.DataFrame()
+    # Load Data Frames 
+    for Agency in scope:
+        # Import as dataframes and add agency_id
+        Routes = pd.read_csv(f'Static GTFS\\{Agency}_{Date}_gtfs\\routes.txt', 
+            usecols=['agency_id','route_id', 'route_short_name','route_type'], 
+            sep=',', header=0, index_col=False, dtype={'route_id':object})
+        Stops = pd.read_csv(f'Static GTFS\\{Agency}_{Date}_gtfs\\stops.txt',
+            usecols=['stop_id', 'stop_name', 'stop_lat', 'stop_lon'], header=0,
+            sep=',', dtype={'stop_id':object}, index_col=False)
+        Times = pd.read_csv(f'Static GTFS\\{Agency}_{Date}_gtfs\\stop_times.txt',
+            usecols=['trip_id','stop_id','arrival_time','departure_time','stop_sequence','pickup_type',
+            'drop_off_type'],header=0,sep=',',dtype={'stop_id':object,'trip_id':object,
+            'pickup_type':"Int64",'drop_off_type':"Int64"},index_col=False)      
+        if Agency in ['GO','UPExpress','MiWay']:        # Sort special service_ids
+            Trip = pd.read_csv(f'Static GTFS\\{Agency}_{Date}_gtfs\\trips.txt',
+                    usecols=['trip_id','service_id','route_id','direction_id'],
+                    header=0, sep=',', dtype={'route_id':object,'trip_id':object})
+            dates = pd.read_csv(f'Static GTFS\\{Agency}_{Date}_gtfs\\calendar_dates.txt',
+                                    header=0, sep=',', dtype={'date':int})
+            ids = dates[dates['date']==Date]['service_id'].values.tolist()
+            Trip = Trip.loc[Trip['service_id'].isin(ids)]
+        if Agency in ['MilT']:   # These agencies fail to include direction_id tag
+            Trip = pd.read_csv(f'Static GTFS\\{Agency}_{Date}_gtfs\\trips.txt',
+                    usecols=['trip_id','service_id','route_id'], header=0,
+                    sep=',', dtype={'route_id':object,'trip_id':object})
+            dates = pd.read_csv(f'Static GTFS\\{Agency}_{Date}_gtfs\\calendar_dates.txt',
+                                    header=0, sep=',', dtype={'date':int})
+            ids = dates[dates['date']==Date]['service_id'].values.tolist()
+            Trip = Trip.loc[Trip['service_id'].isin(ids)]
+            Trip['direction_id'] = 0
+        if Agency in ['BT','BurT','DRT','TTC','YRT']:
+            Trip = pd.read_csv(f'Static GTFS\\{Agency}_{Date}_gtfs\\trips.txt',
+                usecols=['trip_id','service_id','route_id','direction_id'],
+                header=0, sep=',', dtype={'route_id':object,'trip_id':object})
+            calendar = pd.read_csv(f'Static GTFS\\{Agency}_{Date}_gtfs\\calendar.txt',sep=',',
+                        header=0, dtype={'start_date':int,'end_date':int,'route_id':object})
+            ids = calendar[(calendar['start_date']<=20221214)&(calendar['end_date']
+                    >=20221214)&(calendar['wednesday']==1)]['service_id'].values.tolist()
+            dates = pd.read_csv(f'Static GTFS\\{Agency}_{Date}_gtfs\\calendar_dates.txt',
+                                    header=0,sep=',', dtype={'date':int})
+            ids = ids + dates[dates['date']==Date]['service_id'].values.tolist()
+            Trip = Trip.loc[Trip['service_id'].isin(ids)]
+        # Concat to single region-wide GTFS dataframes
+        Stops['stop_id'] = Agency + '_' + Stops['stop_id'].str[:]
+        stops = pd.concat([Stops,stops],ignore_index=True)
+        # Merging dataframes into single one
+        Trips = pd.merge(Routes, Trip, on='route_id')
+        Tours = pd.merge(Times, Trips, on='trip_id')
+        Tours.drop(columns=['trip_id','service_id'], inplace=True)
+        Tours['stop_id'] = Agency + '_' + Tours['stop_id'].str[:]
+        tours = pd.concat([Tours,tours],ignore_index=True)
     stops.reset_index(drop=True,inplace=True)
-    trips = pd.concat([Trips,trips])
-    trips.reset_index(drop=True,inplace=True)
-    times = pd.concat([Times,times])
-    times.reset_index(drop=True,inplace=True)
+    tours.reset_index(drop=True,inplace=True)
+    return tours,stops
 
-# convert to tuple coordinates
-# Convert to Datetimes
-stops.drop_duplicates(subset='stop_name',inplace=True)
-times.arrival_time = times.arrival_time.str.zfill(8)
-times.departure_time = times.departure_time.str.zfill(8)
-times.arrival_time = pd.to_timedelta(times.arrival_time)
-times.departure_time = pd.to_timedelta(times.departure_time)
-stops.stop_name = stops.stop_name.str.lower()
-
-# Interchange Identification
+# Data preprocessing
 '''
-Search for main terminals/stations with common names
-Check list of stop names including interchange names contained in interchange 'hub list'
-Collect stops corresponding to the same interchange to create to/from selection
+Convert times to Datetime Timedelta format, rounding out seconds
+Convert stop_names to all lowercase for simplicity
+Combine trips, times, routes dataframes for required processing
 '''
-interchange = pd.DataFrame()
-interchanges = pd.DataFrame()
-hub_list = pd.read_csv('GTHA_ConnectionHubs.csv')
-    
-for i in range(len(hub_list)):
-    platforms = pd.DataFrame() # Empty processing DF for each iteration
-    platforms = stops.loc[stops['stop_name'].str.contains(
-        hub_list.hub[i],case=False)][['stop_name','stop_lon','stop_lat']]
-    if hub_list.althub1[i] != '-':
-        platforms = stops.loc[stops['stop_name'].str.contains(
-            hub_list.althub1[i],case=False)][['stop_name','stop_lon','stop_lat']]
-        if hub_list.althub2[i] != '-':
-            platforms = stops.loc[stops['stop_name'].str.contains(
-                hub_list.althub2[i],case=False)][['stop_name','stop_lon','stop_lat']]
-    platforms = platforms[platforms['stop_name'].str.contains("golf")==False]
-    platforms.to_csv('GTHA_connections.csv')
-    interchange = pd.DataFrame(itertools.permutations(platforms['stop_name'], 2),
-                               columns=['from_stop','to_stop'])
-    interchange.reset_index(inplace=True,drop=True)
-    interchange = pd.merge(interchange,platforms,left_on='from_stop',right_on='stop_name',
-                           how='left')
-    interchange.rename(columns={'stop_lon':'from_lon','stop_lat':'from_lat'},inplace=True)
-    interchange.drop(columns='stop_name',inplace=True)
-    interchange = pd.merge(interchange,platforms,left_on='to_stop',right_on='stop_name',
-                           how='left')
-    interchange.rename(columns={'stop_lon':'to_lon','stop_lat':'to_lat'},inplace=True)
-    interchange.drop(columns='stop_name',inplace=True)
-    interchanges = pd.concat([interchanges, interchange], axis=0)
-    #interchanges = interchanges[interchanges.from_stop =]
-interchanges.drop_duplicates()
-interchanges.dropna(axis=0)
-interchanges.reset_index(drop=True,inplace=True)
-interchanges.to_csv('GTHA_connections.csv')
+def Preprocessing(stops,calls):
+    services = pd.merge(stops, calls, on='stop_id')
+    services['pickup'] = services.pickup_type.fillna(0)
+    services['dropoff'] = services.drop_off_type.fillna(0)
+    services = services.drop(columns=['pickup_type','drop_off_type'])
+    services.dropna(subset=['stop_name','stop_lat','stop_lon','route_id','route_short_name',
+                    'arrival_time','departure_time','route_type'],inplace=True)
+    # Convert to Datetimes
+    services.arrival_time = pd.to_timedelta(services.arrival_time.str.zfill(8))
+    services.departure_time = pd.to_timedelta(services.departure_time.str.zfill(8))
+    # Round times to nearest minute and convert all to less than a day
+    services.loc[:,'arrival_time'] = services.arrival_time.dt.round("min")
+    services.loc[:,'departure_time'] = services.departure_time.dt.round("min")
+    services.arrival_time = services.arrival_time - pd.to_timedelta(
+        services.arrival_time.dt.days, unit='d')
+    services.departure_time = services.departure_time - pd.to_timedelta(
+        services.departure_time.dt.days, unit='d')
+    services.sort_values(['arrival_time','departure_time'],ascending=True,inplace=True)
+    services.reset_index(inplace=True,)
+    return services
+
+# Interchange Processing
+def StationIdentification(pairs,services):
+    service=services[['stop_id','route_id','route_short_name','direction_id']]
+    pairs['WalkDistance'] = getDistances(pairs)
+    interchanges = pairs.merge(service,on='stop_id',how='inner')
+    interchanges.sort_values('WalkDistance',axis=0,ascending=True,inplace=True)
+    interchanges.drop_duplicates(inplace=True)
+    interchanges.reset_index(drop=True,inplace=True)
+    return interchanges
+
 '''
-# CONNECTION WINDOW #
-Defined by Minimum and Maximum Connection Times
-Rounded to nearest minute. 
-Minimum Connection Time must be at least 2 minutes.
-Using OSRM api
+CONNECTION WINDOW: Defined by Minimum and Maximum Connection Times
+Minimum Connection Time must be at least 2 minutes, using OSRM API.
 '''
-url = "http://router.project-osrm.org/route/v1/foot/"
-def getDistances(df):
-    call = url \
-        + str(df.from_lon)+','+str(df.from_lat) +\
-        ';'+ str(df.to_lon)+','+str(df.to_lat)
-    output = json.loads(requests.get(call).content)
-    if output['code'] == 'Ok':
-        return output["routes"][0]["distance"]
-    else:
-        return 0
-
-# Minimum Connection Time (Walking Distance Between Stop Points)
-walk_speed = 60 # m / min or 1m/s
-interchanges['distance'] = interchanges.apply(getDistances,axis=1)
-interchanges['Min_Connection'] = round(interchanges['distance'] / walk_speed)
-# MinCT must be at least 2 minutes
-interchanges['Min_Connection'].replace(to_replace=0, value=2)
-interchanges['Min_Connection'].replace(to_replace=1, value=2)
-
-# Maximum Connection Time
-# Define based on a fixed value, beyond which a connection is not counted
-maxCT = 10      # Maximum connection time value for connection window
-
-# Perform analysis
-services = pd.merge(times, trips, on='trip_id')
-services = pd.merge(services, stops, on='stop_id', how='left')
-services.drop(columns=['stop_id','stop_lon','stop_lat','service_id'], inplace=True)
-services.sort_values(['arrival_time', 'departure_time'],
-              axis=0, inplace=True, ascending=True)
-services['stop_name'][services['stop_name'].isin(
-    interchanges['from_stop'])].dropna()
-# Merge interchange Connection Taker Stops and Trip Times
-connections = pd.merge(interchanges, services,left_on='to_stop', right_on='stop_name')
-connections.drop(columns=['trip_id','arrival_time', 'departure_time'])
-connections.reindex()
-
-# Simpy Environment Simulation
-env = simpy.Environment()
-tick = 0    # Simulation time ticker
-connex = pd.DataFrame(columns=['arrstop','arrtime','depstop','mindep','maxdep'])  # Processing DF
-while tick <= 1440:
-    toc = dt.timedelta(minutes=tick) + pd.to_timedelta('04:00:00')
-    print('Simulation time is ', toc)
-    for idx, stn in enumerate(services['stop_name']): 
-        # Connection Giver
-        if services.arrival_time[idx] == toc:
-            for it in connections[connections['from_stop'] == stn]['to_stop']:
-                le = len(connex)
-                connex.loc[le,'depstop'] = connections.to_stop.iloc[it]
-                connex.loc[le,'deproute'] = connections.deproute.loc[connections.to_stop == connex.depstop]
-                connex.loc[le,'mindep'] = connex.arrtime + interchanges[
-                   (interchanges.from_stop==connex.arrstop)and(interchanges.to_stop==connex.depstop)]
-                connex.loc[le,'maxdep'] = connex.mindep.iloc[le] + maxCT
-            connex.loc[:,'arrstop'] = stn
-            connex.loc[:,'arrtime'] = toc
-        # Connection Taker
-        if services.departure_time[idx] == toc:
-            # Test for Open Connection
-            for inc,dep in enumerate(connex['depstop']):
-                if (dep == stn) and (connex.deproute.iloc[inc] == services.route_id[idx]):
-                    connex.deptime[connex.depstop == stn] = toc
-                    # Iterate up total potential connections for stop pair
-                    connections.calls[interchanges.to_stop == stn] += 1
-                    # Test for Successful Connection
-                    if (connex.mindep.iloc[inc] <= toc)and(connex.maxdep.iloc[inc] >= toc):
-                        connections.successful[connex.depstop == stn] += 1
-                        # Close out connection option by deleting row
-                        connex.drop(inc, axis=0)
-    tick += 1 #Advance timestep by 1 minute      
+def getDistances(loci):
+    distlist = []
+    url = "http://router.project-osrm.org/route/v1/foot/"
+    for index, rows in loci.iterrows():
+        call = url \
+        + str(rows.from_lon) + ',' + str(rows.from_lat) + \
+        ';' + str(rows.to_lon) + ',' + str(rows.to_lat)
+        output = json.loads(requests.get(call,timeout=10).content)
+        if output['code'] == 'Ok':
+            distlist.append(output["routes"][0]["distance"])
+    return distlist
  
-# Final Performance
-connections.punctuality = connections.successful / connections.calls
-# Output results
-connections.to_csv('GTHA_connections.csv')
-
-
-print(connections.punctuality.describe())
+''' Connection Hub Processing Class'''
+class Hub(object):
+    
+    def __init__(self):
+        self.connex = set()
+        self.conarr = set()
+        self.condep = set()
+        '''
+Connex tuple formt:
+(from_route, from_direction, from_stop, arrival_time, to_stop, to_id, to_route, direction, mindep, maxdep)
+Note index = ( 0, 1, 2, 3, 4, 5, 6, 7, 8, 9)
+        '''
+        self.transfers = {'Pair':[],     # Tuple of FromStop, ToStop, Route
+                       'Connect':[],   # Number of connections
+                       'Success':[]}   # Number of successful connections (counter)
+        '''
+        transfers dict 'Pair' list tuple format:
+        (from_stop,to_stop, route_short_name, direction_id)
+        '''
+        
+    def ConnectionAnalyzer(self, tic, services, maxCT, minutes):
+        toc = dt.timedelta(minutes = tic) + pd.to_timedelta('07:00:00')
+        print(toc)
+        # Connection Giver
+        service = services[services['arrival_time']==toc]
+        for j, sta in service.iterrows():
+            if sta['dropoff'] != 1:
+            # GO Train as Connection Giver
+                if sta['from_stop'] == sta['to_stop']:
+                    connect = services[services['to_stop'] != sta['from_stop']][['from_stop','to_stop','stop_id',
+                            'route_short_name','direction_id','Min_Connect']].drop_duplicates()
+                    for j, cx in connect.iterrows():
+                        mindep = toc + cx['Min_Connect']
+                        maxdep = mindep + maxCT
+                        self.connex.add((sta['route_short_name'],sta['direction_id'],sta['from_stop'],toc,
+                            cx['to_stop'],cx['stop_id'],cx['route_short_name'],cx['direction_id'],mindep,maxdep))
+            # Local Transit as Connection Giver
+                else:
+                    mindep = toc + sta['Min_Connect']
+                    maxdep = mindep + maxCT
+                    for i in services[services['to_stop']==sta['from_stop']]['route_short_name']:
+                        self.connex.add((sta['route_short_name'],sta['direction_id'],sta['to_stop'],
+                                         toc,sta['from_stop'],sta['stop_id'],i,0,mindep,maxdep))
+                        self.connex.add((sta['route_short_name'],sta['direction_id'],sta['to_stop'],
+                                         toc,sta['from_stop'],sta['stop_id'],i,1,mindep,maxdep))
+                    
+        # Connection Taker
+        service = services[services['departure_time']==toc]
+        for i, chg in service.iterrows():
+            if chg['pickup'] != 1:
+                for k in self.connex.copy():
+                    art, adi, arr, dep, did, rte, dic = k[0], k[1], k[2], k[4], k[5], k[6], k[7]
+                    if (dep==chg['to_stop'])&(did==chg['stop_id'])&\
+                        (rte==chg['route_short_name'])&(dic==chg['direction_id']):
+                        tp = (art, adi, arr, dep, did, rte,dic)
+                        if tp not in self.transfers['Pair']:
+                            self.transfers['Pair'].append(tp)
+                            self.transfers['Connect'].append(0)
+                            self.transfers['Success'].append(0)
+                        idx = self.transfers['Pair'].index(tp)
+                        if (k[8] <= toc <= k[9]):
+                            self.transfers['Connect'][idx] += 1
+                            self.transfers['Success'][idx] += 1
+                            # Close out connection processing by deleting row
+                            self.connex.remove(k)
+                        # Discard Missed Connections outside Window
+                        elif k[9] < toc < (k[8] + pd.to_timedelta('01:00:00')):
+                            self.transfers['Connect'][idx] += 1
+                            # Close out connection processing by deleting row
+                            self.connex.remove(k)
+                        elif toc > (k[8] + pd.to_timedelta('01:00:00')):
+                                # Connection not counted. Close entirely.
+                                self.connex.remove(k)
+                    elif tic == (minutes - 1):    #Remove connections that are never closed by EOD.
+                        # Assume no connections
+                        self.connex.remove(k)
+            if chg['pickup'] == 1:
+                service.drop(i, axis='index')
+        return True
+    
+    def ConnectionGiver(self, tic, services, maxCT):
+        toc = dt.timedelta(minutes = tic) + pd.to_timedelta('07:00:00')
+        print('Giver Clock:',toc)
+        servicarr = services[services['arrival_time']==toc]
+        for j, sta in servicarr.iterrows():
+            if sta['dropoff'] != 1:
+                if sta['from_stop'] == sta['to_stop']:
+                    connect = services[services['to_stop'] != sta['from_stop']][['from_stop','to_stop','stop_id',
+                            'route_short_name','direction_id','Min_Connect']].drop_duplicates()
+                    for j, cx in connect.iterrows():
+                        mindep = toc + cx['Min_Connect']
+                        maxdep = mindep + maxCT
+                        self.condep.add((sta['route_short_name'],sta['direction_id'],sta['from_stop'],toc,
+                            cx['to_stop'],cx['stop_id'],cx['route_short_name'],cx['direction_id'],mindep,maxdep))
+                        
+        servicdep = services[services['departure_time']==toc]
+        for j, sta in servicdep.iterrows():
+            if sta['dropoff'] != 1:
+                if sta['from_stop'] == sta['to_stop']:
+                    connect = services[services['to_stop'] != sta['from_stop']].drop_duplicates()
+                    for j, cx in connect.iterrows():
+                        maxarr = toc - cx['Min_Connect']
+                        minarr = maxarr - maxCT
+                        self.conarr.add((cx['route_short_name'],cx['direction_id'],cx['to_stop'],toc,
+                            cx['from_stop'],sta['stop_id'],sta['route_short_name'],sta['direction_id'],minarr,maxarr))
+                
+    def ConnectionTaker(self, tac, services, maxCT, minutes):
+        toc = dt.timedelta(minutes = tac) + pd.to_timedelta('07:00:00')
+        print('Taker Clock:',toc)
+        servicdep = services[services['departure_time']==toc]
+        for i, chg in servicdep.iterrows():
+            if chg['pickup'] != 1:
+                for k in self.condep.copy():
+                    art, adi, arr, dep, did, rte, dic = k[0], k[1], k[2], k[4], k[5], k[6], k[7]
+                    if (arr==chg['from_stop'])&(dep==chg['to_stop'])&(did==chg['stop_id'])\
+                        &(rte==chg['route_short_name'])&(dic==chg['direction_id']):
+                        tp = (art, adi, arr, dep, did, rte, dic)
+                        if tp not in self.transfers['Pair']:
+                            self.transfers['Pair'].append(tp)
+                            self.transfers['Connect'].append(0)
+                            self.transfers['Success'].append(0)
+                        idx = self.transfers['Pair'].index(tp)
+                        if (k[8] <= toc <= k[9]):
+                            self.transfers['Connect'][idx] += 1
+                            self.transfers['Success'][idx] += 1
+                            # Close out connection processing by deleting row
+                            self.condep.remove(k)
+                        # Discard Missed Connections outside Window
+                        elif k[9] < toc < (k[8] + pd.to_timedelta('01:00:00')):
+                            self.transfers['Connect'][idx] += 1
+                            # Close out connection processing by deleting row
+                            self.condep.remove(k)
+                        elif toc > (k[8] + pd.to_timedelta('01:00:00')):
+                            # Connection not counted. Close entirely.
+                            self.condep.remove(k)
+                    elif tac == (minutes - 1):    #Remove connections that are never closed by EOD.
+                        # Assume no connections
+                        self.condep.remove(k)
+            if chg['pickup'] == 1:
+                servicdep.drop(i, axis='index')
+                
+            servicarr = services[services['arrival_time']==toc]
+            for i, chg in servicarr.iterrows():
+                if chg['pickup'] != 1:
+                    for k in self.conarr.copy():
+                        art, adi, arr, dep, did, rte, dic = k[0], k[1], k[2], k[4], k[5], k[6], k[7]
+                        if (dep==chg['from_stop'])&(arr==chg['to_stop'])&\
+                            (art==chg['route_short_name'])&(adi==chg['direction_id']):
+                            tp = (art, adi, arr, dep, did, rte, dic)
+                            if tp not in self.transfers['Pair']:
+                                self.transfers['Pair'].append(tp)
+                                self.transfers['Connect'].append(0)
+                                self.transfers['Success'].append(0)
+                            idx = self.transfers['Pair'].index(tp)
+                            if (k[8] <= toc <= k[9]):
+                                self.transfers['Connect'][idx] += 1
+                                self.transfers['Success'][idx] += 1
+                                # Close out connection processing by deleting row
+                                self.conarr.remove(k)
+                                # Discard Missed Connections outside Window
+                            elif k[9] < toc < (k[8] + pd.to_timedelta('01:00:00')):
+                                self.transfers['Connect'][idx] += 1
+                                # Close out connection processing by deleting row
+                                self.conarr.remove(k)
+                            elif toc > (k[8] + pd.to_timedelta('01:00:00')):
+                                # Connection not counted. Close entirely.
+                                self.conarr.remove(k)
+                        elif tac == (minutes - 1):    #Remove connections that are never closed by EOD.
+                            # Assume no connections
+                            self.conarr.remove(k)
+                    if chg['pickup'] == 1:
+                        servicarr.drop(i, axis='index')
+        return True
+                    
+    def HubClosure(self):
+        return self.transfers   
+    
